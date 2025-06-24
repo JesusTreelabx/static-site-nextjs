@@ -1,16 +1,36 @@
 version: 0.2
-
+env:
+  shell: bash
 phases:
   install:
     runtime-versions:
-      nodejs: 16
+      nodejs: 20
     commands:
-      - echo Installing dependencies...
+      - echo Installing AWS CLI and jq...
+      - if ! command -v aws &> /dev/null; then curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && unzip awscliv2.zip && sudo ./aws/install; fi
+      - if ! command -v jq &> /dev/null; then sudo yum install -y jq; fi
+  pre_build:
+    commands:
+      - export SECRET_NAME=eqhuma-secrets
+      - export SECRETS=$(aws secretsmanager get-secret-value --secret-id $SECRET_NAME --query SecretString --output text)
+      - echo "Exporting secrets as environment variables..."
+      - export BUCKET_NAME=$(echo $SECRETS | jq -r .BUCKET_NAME)
+      - echo "Installing dependencies..."
       - npm install
   build:
     commands:
-      - echo Building the Next.js app...
+      - echo "Building the project..."
       - npm run build
+  post_build:
+    commands:
+      - if [[ $CODEBUILD_BUILD_SUCCEEDING == 0 ]]; then exit 1; fi
+      - echo "Cleaning up existing files in S3..."
+      - aws s3 rm --recursive s3://${BUCKET_NAME}/
+      - echo "Syncing new build to S3..."
+      - aws s3 sync out/ s3://${BUCKET_NAME}/ --delete
+      - echo "Build completed"
 artifacts:
   files:
-    - '**/*'
+    - "**/*"
+  discard-paths: no
+  base-directory: out
